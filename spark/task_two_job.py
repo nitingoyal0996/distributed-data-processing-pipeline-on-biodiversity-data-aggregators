@@ -47,62 +47,76 @@ def run_spark_job(topic):
 
     json_data = base_data.withColumn("value", from_json(base_data["value"], schema_map[topic])).select("value.*")
     
-    print('json_data: ', json_data.printSchema())
     if topic == "idigbio":
-        aggregated_data = json_data \
-            .groupBy() \
-            .agg(
-                lit(topic.upper()).alias("Source"),
-                count(when(lower(col("dwc:kingdom")) == "animalia", 1)).alias("Number of Animal Records"),
-                count(when(lower(col("dwc:kingdom")) == "plantae", 1)).alias("Number of Plant Records"),
-                count(when(lower(col("dwc:kingdom")) == "fungi", 1)).alias("Number of Fungi Records"),
-                approx_count_distinct("dwc:scientificName").alias("Total Number of Unique Species"),
-                count("*").alias("Total Records")
+        #### TASK - 2 Queries ####
+        ## Query - 1: /count?by=kingdom
+        aggregated_kingdom_data = json_data.groupBy("dwc:kingdom").agg(count("*").alias("count"))
+        ## Query - 2, 3: /count?by=species and /count?by=source
+        aggregated_rest_data = json_data.groupBy().agg(
+            lit(topic.upper()).alias("source"),
+            approx_count_distinct("dwc:scientificName").alias("distinct_count"),
+            count("*").alias("total_records")
             )
     else:
-        aggregated_data = json_data \
-            .groupBy() \
-            .agg(
-                lit(topic.upper()).alias("Source"),
-                count(when(lower(col("kingdom")) == "animalia", 1)).alias("Number of Animal Records"),
-                count(when(lower(col("kingdom")) == "plantae", 1)).alias("Number of Plant Records"),
-                count(when(lower(col("kingdom")) == "fungi", 1)).alias("Number of Fungi Records"),
-                approx_count_distinct("scientificName").alias("Total Number of Unique Species"),
-                count("*").alias("Total Records")
-            )
+        #### TASK - 2 Queries ####
+        ## Query - 1: /count?by=kingdom
+        aggregated_kingdom_data = json_data.groupBy("kingdom").agg(count("*").alias("count"))
+        ## Query - 2, 3: /count?by=species and /count?by=source
+        aggregated_rest_data = json_data.groupBy().agg(
+            lit(topic.upper()).alias("source"),
+            approx_count_distinct("scientificName").alias("distinct_count"),
+            count("*").alias("total_records")
+        )
 
-    # DEBUGGER QUERY: Print each record using foreachBatch in Structured Streaming
-    # def print_records_batch(df, epoch_id):
-    #     for row in df.collect():
-    #         print(row)
-    # query = base_data.writeStream \
-    #     .foreachBatch(print_records_batch) \
-    #     .start()
-    # query.awaitTermination(30)
+    topic_name = f'{topic}_query'
+    king_query_name = 'kingdom_query'
+    rest_query_name = 'rest_query'
 
-    query_name = f'{topic}_query'
-
-    # Start the query
-    query = aggregated_data \
+    kingdom_query = aggregated_kingdom_data \
         .writeStream \
-        .queryName(query_name) \
+        .queryName(king_query_name) \
         .format("memory") \
         .outputMode("complete") \
         .trigger(processingTime="15 seconds") \
         .start()
 
-    query.awaitTermination(60)
+    rest_query = aggregated_rest_data \
+        .writeStream \
+        .queryName(rest_query_name) \
+        .format("memory") \
+        .outputMode("complete") \
+        .trigger(processingTime="15 seconds") \
+        .start()
 
-    data = spark.sql(f'SELECT * FROM {query_name}')
+    kingdom_query.awaitTermination(60)
+    rest_query.awaitTermination(60)
+
+    data = spark.sql(f'SELECT * FROM {king_query_name}')
+    data_2 = spark.sql(f'SELECT * FROM {rest_query_name}')
 
     pandas_df = data.toPandas()
     data_dict = pandas_df.to_dict(orient="records")
+    for item in data_dict:
+        if "dwc:kingdom" in item:
+            item["kingdom"] = item.pop("dwc:kingdom")
+    pandas_df_2 = data_2.toPandas()
+    data_dict_2 = pandas_df_2.to_dict(orient="records")
+    print('\n\n\n\n')
     print(data_dict)
+    print('\n\n\n\n')
+    print(data_dict_2)
+    print('\n\n\n\n')
+    
+    data = {
+        'kingdom': data_dict,
+        'species': data_dict_2[0]['distinct_count'],
+        'source_count': data_dict_2[0]['total_records'],
+        'source_name': data_dict_2[0]['source']
+    }
     
     # Publish data_dict to Kafka topic
-    topic_name = query_name
-    create_topic_if_not_exists(topic_name)
-    publish_to_kafka(data_dict, topic_name)
+    create_topic_if_not_exists(topic_name, bootstrap_servers=",".join(kafka_servers))
+    publish_to_kafka([data], topic_name, bootstrap_servers=",".join(kafka_servers))
     
     spark.stop()
 if __name__ == '__main__':

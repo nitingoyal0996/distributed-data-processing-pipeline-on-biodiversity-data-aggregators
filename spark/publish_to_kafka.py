@@ -2,7 +2,7 @@ from confluent_kafka import Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 import json
 
-def create_topic_if_not_exists(topic_name, bootstrap_servers='localhost:9092'):
+def create_topic_if_not_exists(topic_name, bootstrap_servers):
     # Create AdminClient with the Kafka broker address
     admin_client = AdminClient({'bootstrap.servers': bootstrap_servers})
 
@@ -16,7 +16,7 @@ def create_topic_if_not_exists(topic_name, bootstrap_servers='localhost:9092'):
     else:
         print("Topic already exists:", topic_name)
 
-def publish_to_kafka( data_dict, topic_name, bootstrap_servers='localhost:9092'):
+def publish_to_kafka( data_dict, topic_name, bootstrap_servers):
     # Kafka producer configuration
     conf = {
         'bootstrap.servers': bootstrap_servers,  # Kafka broker address

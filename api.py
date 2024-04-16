@@ -11,9 +11,7 @@ from threading import Thread, Timer
 from spark_submit import SparkJob
 from flask import Flask, jsonify, request
 # from confluent_kafka import Consumer, KafkaError
-from src.kafka.consumer import MyConsumer
 from src.kafka.topic import MyTopics
-from src.kafka.runner.producer_main import stream_data_from_source
 from urllib.parse import urlparse
 
 app = Flask(__name__)
@@ -24,24 +22,21 @@ kafka_brokers = ['128.110.217.192:9092','128.110.217.175:9092', '128.110.217.163
 broker_source = {
                   "gbif": {
                     "address": "128.110.217.175:9092",
-                    "spark_job_submitted": False,
+                    "spark_job_count": 0,
                     "is_producer_online": False,
                     "source": "https://gbif.org",
-                    "spark_job_object": None
                   },
                   "obis": {
                     "address": "128.110.217.192:9092",
-                    "spark_job_submitted": False,
+                    "spark_job_count": 0,
                     "is_producer_online": False,
-                    "source": "https://obis.org",
-                    "spark_job_object": None
+                    "source": "https://obis.org"
                   },
                   "idigbio": {
                     "address" : "128.110.217.163:9092",
-                    "spark_job_submitted": False,
+                    "spark_job_count": 0,
                     "is_producer_online": False,
-                    "source": "https://idigbio.org",
-                    "spark_job_object": None
+                    "source": "https://idigbio.org"
                   }
                 }
 
@@ -64,7 +59,7 @@ def get_messages(topic):
   # Open a subprocess to execute the command
   process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
   # Create a Timer object to kill the process after 10 seconds
-  timer = Timer(10, timeout_handler)
+  timer = Timer(5, timeout_handler)
   timer.start()
   messages = []
   try:
@@ -88,8 +83,31 @@ def get_messages(topic):
   json_array = json.dumps(messages)
   return json.loads(json_array)
 
-def get_kingdom_count():
-  pass
+def aggregate_kingdom_counts(data_list):
+    kingdom_counts = {}
+    for data in data_list:
+        if data is not None:
+          for kingdom in data["kingdom"]:
+              if kingdom["kingdom"] in kingdom_counts:
+                  kingdom_counts[kingdom["kingdom"]] += kingdom["count"]
+              elif kingdom["kingdom"] == None:
+                kingdom_counts['Title Unavailable'] = kingdom["count"]
+              else:
+                  kingdom_counts[kingdom["kingdom"]] = kingdom["count"]
+    return kingdom_counts
+
+def aggregate_species_count(data_list):
+    result = {}
+    total_species = sum(data["species"] for data in data_list)
+    print(total_species)
+    result['species'] = total_species
+    return result
+
+def aggregate_source_counts(data_list):
+    source_counts = {}
+    for data in data_list:
+        source_counts[data["source_name"]] = data["source_count"]
+    return source_counts
 
 @app.route('/')
 def hello_world():
@@ -117,6 +135,9 @@ def add_source():
                  broker_address, 
                  topic]
         produce_process = subprocess.Popen(produce_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        # set producer online to True
+        broker_source[topic]['is_producer_online'] = True
         print(f'Submitted: {" ".join(produce_command)} \n Producer started streaming in the background. Continuing with the rest of the program..., {produce_process.pid}')
         
       Thread(target=start_my_stream).start()
@@ -134,12 +155,12 @@ def add_source():
                         'packages': 'org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.0'
                       }
 
-        main_file = '/users/ngoyal/src/spark/job_2.py'
+        main_file = '/users/ngoyal/src/spark/task_two_job.py'
         app = SparkJob(main_file, **spark_args)
         app.submit()
         
-        # increment the spark_job_run_count key in the source object with one after completion and make the spark_job_running = False
-        broker_source[topic]['spark_job_object'] = app
+        # increment the spark_job_run_count key in the source object 
+        broker_source[topic]['spark_job_count'] = broker_source[topic]['spark_job_count'] + 1
 
       Thread(target=submit_my_job).start()
       broker_source[topic]['spark_job_submitted'] = True
@@ -154,36 +175,47 @@ def add_source():
 @app.route('/listSources')
 def list_sources():
   # get list of topics from the kafka admin 
-  # from the list of sources return the topics where the spark_job_submitted = True
-  pass
+  # from the list of sources return the topics where the spark_job_count > 0
+  sources = []
+  for topic, metadata in broker_source.items():
+    if metadata['spark_job_count'] > 0:
+      sources.append(f'http://{topic}.org')
+  return jsonify({'message': 'Success', 'sources': sources}), 200
 
 @app.route('/count')
 def count():
     by = request.args.get('by')
     if by not in ['kingdom', 'source', 'species']:
-      return jsonify({"error": "Invalid filter value, allowed: ['kingdom', 'source', 'species']"}), 400
-    
-    # read the latest query results for all topics
-    gbif_results = get_messages('gbif_query')[-1]
-    obis_results = get_messages('obis_query')[-1]
-    idigbio_results = get_messages('idigbio_query')[-1]
-    print(f'gbif_results: f{gbif_results}')
-    print(f'obis_results: f{obis_results}')
-    print(f'idigbio_results: f{idigbio_results}')
-  
-    if by == 'kingdom':
-      # consolidate the kingdom count
-      pass
-    elif by == 'source':
-      # consolidate the source count 
-      pass
-    else:
-      # consolidate the species count
-      pass
-    
-    try:
-      # messages = []
-      return jsonify({"message": 'Message read successfully'}), 200
+      return jsonify({"error": f"Unrecognized parameter '{by}'."}), 404
+    try:  
+      # get eligible sources to consolidate counts -
+      topics = []
+      for topic, metadata in broker_source.items():
+        if metadata['spark_job_count'] > 0:
+          topics.append(f'{topic}_query')
+      
+      messages = []
+      for topic in topics:
+        # read the latest query results for all topics
+        results = get_messages(topic)
+        messages.append(results[-1] if len(results) > 0 else None)
+
+      if by == 'kingdom':
+        # consolidate the kingdom count
+        result = aggregate_kingdom_counts(messages)
+      elif by == 'source':
+        source_count = aggregate_source_counts(messages)
+        result = {}
+        for source_name, source_count in source_count.items():
+            result[f"http://{source_name}.org"] = source_count
+      else:
+        print(messages)
+        species_count = aggregate_species_count(messages)
+        result = {}
+        result['species'] = species_count['species']
+
+      print(f'\n\nresult: {result}\n\n')
+      return jsonify({"message": 'Success', 'count': result}), 200
       # Handle timeout exception
     except Exception as e:
         print(traceback.format_exc())
