@@ -14,8 +14,8 @@ from pyspark.sql.types import *
 from src.schemas import gbif_schema, obis_schema, idigbio_schema
 from src.spark.publish_to_kafka import publish_to_kafka, create_topic_if_not_exists
 
-def run_spark_job(topic = 'gbif'):
-    
+def run_spark_job(topic):
+    print(topic)
     schema_map = {
         'gbif': gbif_schema.schema,
         'idigbio': idigbio_schema.schema,
@@ -45,18 +45,40 @@ def run_spark_job(topic = 'gbif'):
 
     base_data = data.selectExpr("CAST(value AS STRING)")
 
-    # Parse JSON data using corresponding schema
     json_data = base_data.withColumn("value", from_json(base_data["value"], schema_map[topic])).select("value.*")
+    
+    print('json_data: ', json_data.printSchema())
+    if topic == "idigbio":
+        aggregated_data = json_data \
+            .groupBy() \
+            .agg(
+                lit(topic.upper()).alias("Source"),
+                count(when(lower(col("dwc:kingdom")) == "animalia", 1)).alias("Number of Animal Records"),
+                count(when(lower(col("dwc:kingdom")) == "plantae", 1)).alias("Number of Plant Records"),
+                count(when(lower(col("dwc:kingdom")) == "fungi", 1)).alias("Number of Fungi Records"),
+                approx_count_distinct("dwc:scientificName").alias("Total Number of Unique Species"),
+                count("*").alias("Total Records")
+            )
+    else:
+        aggregated_data = json_data \
+            .groupBy() \
+            .agg(
+                lit(topic.upper()).alias("Source"),
+                count(when(lower(col("kingdom")) == "animalia", 1)).alias("Number of Animal Records"),
+                count(when(lower(col("kingdom")) == "plantae", 1)).alias("Number of Plant Records"),
+                count(when(lower(col("kingdom")) == "fungi", 1)).alias("Number of Fungi Records"),
+                approx_count_distinct("scientificName").alias("Total Number of Unique Species"),
+                count("*").alias("Total Records")
+            )
 
-    aggregated_data = json_data \
-                .groupBy() \
-                .agg(
-                    lit(topic.upper()).alias("Source"),
-                    count(when(col("kingdom") == "Animalia", 1)).alias("Number of Animal Records"),
-                    count(when(col("kingdom") == "Plantae", 1)).alias("Number of Plant Records"),
-                    count(when(col("kingdom") == "Fungi", 1)).alias("Number of Fungi Records"),
-                    approx_count_distinct("scientificName").alias("Total Number of Unique Species")
-                )
+    # DEBUGGER QUERY: Print each record using foreachBatch in Structured Streaming
+    # def print_records_batch(df, epoch_id):
+    #     for row in df.collect():
+    #         print(row)
+    # query = base_data.writeStream \
+    #     .foreachBatch(print_records_batch) \
+    #     .start()
+    # query.awaitTermination(30)
 
     query_name = f'{topic}_query'
 
@@ -66,9 +88,10 @@ def run_spark_job(topic = 'gbif'):
         .queryName(query_name) \
         .format("memory") \
         .outputMode("complete") \
+        .trigger(processingTime="15 seconds") \
         .start()
 
-    query.awaitTermination(50)
+    query.awaitTermination(60)
 
     data = spark.sql(f'SELECT * FROM {query_name}')
 
@@ -80,15 +103,7 @@ def run_spark_job(topic = 'gbif'):
     topic_name = query_name
     create_topic_if_not_exists(topic_name)
     publish_to_kafka(data_dict, topic_name)
-
-    # if not os.path.exists('spark_api_outputs'):
-    #     os.makedirs('spark_api_outputs')
-    # timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    # file_path = f'{topic}_output_{timestamp}.json'
-    # with open(file_path, "w") as f:
-    #     json.dump(data_dict, f)
-    #     print(f"File saved: {file_path}")
-
+    
     spark.stop()
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process some data.')

@@ -44,7 +44,7 @@ class IdigbioStream(Stream):
                     records = response_data["items"]
                     # yield records
                     for record in records:
-                        yield record
+                        yield record["data"]
 
                     # If this is the last page of records
                     if response_data["itemCount"] <= query["limit"]:
