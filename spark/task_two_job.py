@@ -31,8 +31,8 @@ def run_spark_job(topic):
         .config("spark.sql.shuffle.partitions", "4") \
         .config("spark.executor.cores", "4")\
         .config("spark.executor.instances", "1")\
-        .config("spark.executor.memory", "5g") \
-        .config("spark.driver.memory", "5g") \
+        .config("spark.executor.memory", "15g") \
+        .config("spark.driver.memory", "15g") \
         .getOrCreate()
 
     # Read data from Kafka in a streaming DataFrame
