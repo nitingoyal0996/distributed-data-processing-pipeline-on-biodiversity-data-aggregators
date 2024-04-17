@@ -1,6 +1,4 @@
 import sys
-
-from kafka import KafkaConsumer
 sys.path.append('/users/ngoyal')
 import findspark
 findspark.init()
@@ -10,11 +8,13 @@ import json
 from threading import Thread, Timer
 from spark_submit import SparkJob
 from flask import Flask, jsonify, request
-# from confluent_kafka import Consumer, KafkaError
 from src.kafka.topic import MyTopics
 from urllib.parse import urlparse
+from functools import wraps
+from flask_talisman import Talisman
 
 app = Flask(__name__)
+Talisman(app, content_security_policy=None)
 
 # meta data
 kafka_brokers = ['128.110.217.192:9092','128.110.217.175:9092', '128.110.217.163:9092']
@@ -39,6 +39,9 @@ broker_source = {
                     "source": "https://idigbio.org"
                   }
                 }
+
+app.config['SECRET_KEY'] = 'your_secret_key_here'
+dummy_token = 'dummy_token_value'
 
 def get_domain(url):
     parsed_url = urlparse(url)
@@ -109,11 +112,32 @@ def aggregate_source_counts(data_list):
         source_counts[data["source_name"]] = data["source_count"]
     return source_counts
 
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.args.get('token')
+
+        if not token:
+            return jsonify({'message': 'Token is missing!'}), 401
+
+        if token != dummy_token:
+            return jsonify({'message': 'Token is invalid!'}), 401
+
+        return f(*args, **kwargs)
+
+    return decorated
+
 @app.route('/')
+@token_required
 def hello_world():
   return jsonify({'message': 'Hello bio enthusiasts!'})
 
+@app.route('/getToken')
+def get_token():
+  return jsonify({'token': dummy_token})
+
 @app.route('/addSource')
+@token_required
 def add_source():
   url = request.args.get('url') 
   if not url:
@@ -173,6 +197,7 @@ def add_source():
     return jsonify({'message': 'URL not found'}), 400
 
 @app.route('/listSources')
+@token_required
 def list_sources():
   # get list of topics from the kafka admin 
   # from the list of sources return the topics where the spark_job_count > 0
@@ -183,6 +208,7 @@ def list_sources():
   return jsonify({'message': 'Success', 'sources': sources}), 200
 
 @app.route('/count')
+@token_required
 def count():
     by = request.args.get('by')
     if by not in ['kingdom', 'source', 'species']:
@@ -221,10 +247,15 @@ def count():
         print(traceback.format_exc())
         return jsonify({'error': 'Server failure'}), 500
 
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204
+
 @app.errorhandler(404)
-def handle_404():
+def handle_404(error = ''):
   # Customize error message for clarity
-  return jsonify({'error': 'not found'}), 404
+  print(error)
+  return jsonify({'error': 'Not found'}), 404
 
 if __name__ == '__main__':
-  app.run(host='0.0.0.0', port=12700, debug=True)
+  app.run(host='0.0.0.0', port=443, ssl_context=('/users/ngoyal/server.crt', '/users/ngoyal/server.key'), debug=True)
