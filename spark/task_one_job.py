@@ -31,8 +31,6 @@ def run_spark_job(topic):
         .config("spark.sql.shuffle.partitions", "4") \
         .config("spark.executor.cores", "4")\
         .config("spark.executor.instances", "1")\
-        .config("spark.executor.memory", "5g") \
-        .config("spark.driver.memory", "5g") \
         .getOrCreate()
 
     # Read data from Kafka in a streaming DataFrame
@@ -65,11 +63,10 @@ def run_spark_job(topic):
             .groupBy() \
             .agg(
                 lit(topic.upper()).alias("Source"),
-                count(when(lower(col("kingdom")) == "animalia", 1)).alias("Number of Animal Records"),
-                count(when(lower(col("kingdom")) == "plantae", 1)).alias("Number of Plant Records"),
-                count(when(lower(col("kingdom")) == "fungi", 1)).alias("Number of Fungi Records"),
-                approx_count_distinct("scientificName").alias("Total Number of Unique Species"),
-                count("*").alias("Total Records")
+                count(when(lower(col("kingdom")) == "animalia", 1)).alias("Number of animal records"),
+                count(when(lower(col("kingdom")) == "plantae", 1)).alias("Number of plant records"),
+                count(when(lower(col("kingdom")) == "fungi", 1)).alias("Number of fungi records"),
+                approx_count_distinct("scientificName").alias("Total number of unique species"),
             )
 
     # DEBUGGER QUERY: Print each record using foreachBatch in Structured Streaming
@@ -89,10 +86,10 @@ def run_spark_job(topic):
         .queryName(topic_name) \
         .format("console") \
         .outputMode("complete") \
-        .trigger(processingTime="15 seconds") \
+        .trigger(processingTime="120 seconds") \
         .start()
 
-    query.awaitTermination(60)
+    query.awaitTermination(1200)
 
     # data = spark.sql(f'SELECT * FROM {topic_name}')
 

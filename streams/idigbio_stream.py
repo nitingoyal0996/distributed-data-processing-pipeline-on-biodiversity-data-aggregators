@@ -8,7 +8,7 @@ import requests as rq
 from src.utils.interfaces.stream_interface import Stream
 
 class IdigbioStream(Stream):
-    def __init__(self, page_size=1000, retry_delay=2, timeout=30):
+    def __init__(self, page_size=100, retry_delay=2, timeout=30):
         self.PAGE_SIZE = page_size
         self.RETRY_DELAY_IN_SECONDS = retry_delay
         self.TIMEOUT_IN_SECONDS = timeout
