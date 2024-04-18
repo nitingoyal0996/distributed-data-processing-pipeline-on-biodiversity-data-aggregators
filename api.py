@@ -258,4 +258,4 @@ def handle_404(error = ''):
   return jsonify({'error': 'Not found'}), 404
 
 if __name__ == '__main__':
-  app.run(host='0.0.0.0', port=443, ssl_context=('/users/ngoyal/server.crt', '/users/ngoyal/server.key'), debug=True)
+  app.run(host='0.0.0.0', port=12700, ssl_context=('/users/ngoyal/server.crt', '/users/ngoyal/server.key'), debug=True)
